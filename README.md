@@ -1,116 +1,121 @@
 # intentra
 
-**Deterministic multi-peer UDP transport for real-time state distribution**
+> **Q: What is intentra?**
+> A deterministic, multi-peer UDP transport for **real-time state distribution** in private networks.
 
-**Status:** v0.1.0 (unstable API)
-**Language:** Rust 2021
-**License:** MIT OR Apache-2.0
-
----
-
-## What is intentra?
-
-**intentra** is a hardened UDP transport designed for **low-latency, high-frequency state broadcast in private networks**.
-
-It is optimized for workloads where:
-
-* many peers exchange small state updates
-* latency and determinism matter more than reliability
-* packet drops are acceptable, stalls are not
-* peers are known and networks are firewalled
+> **Q: What problem does it solve?**
+> Sending **lots of small updates** to **many peers** with **low latency**, where **drops are OK but stalls are not**.
 
 ---
 
-## What it does well
+## What intentra is good at
 
-* **Multi-peer UDP transport**
-* Single-threaded event loop with per-peer state machines
+> **Q: What does it do well?**
+
+* Multi-peer UDP (thousands of peers, one socket)
 * Deterministic packet processing (no head-of-line blocking)
-* Graceful overload behavior (drops instead of stalls)
+* Graceful overload (drops instead of freezing)
+* Single-threaded, predictable behavior
 
-### Security & DoS resistance
+> **Security?**
 
-* AES-256-GCM per-packet authenticated encryption
-* Noise Protocol handshake (XX, X25519)
-* Stateless cookie verification
-* Per-peer rate limiting (10,000 pps)
-* Replay protection (64-bit sliding window)
-* Cryptographic ACK authentication
+* AES-256-GCM per packet
+* Noise (X25519) handshake with stateless cookies
+* Per-peer rate limiting (10k pps)
+* Replay protection (64-bit window)
+* Authenticated ACKs
 
-### Observability
+> **Can I observe what’s happening?**
 
-* Always-on metrics (Prometheus format)
-* Rate-limit drops, crypto failures, handshake pressure visible at runtime
-
----
-
-## What it is NOT
-
-* Not a replacement for TLS / QUIC / TCP
-* Not suitable for unfiltered public internet exposure
-* Not zero-configuration
-* Not zero packet loss
-* Not an RPC or stream-multiplexing framework
-
-If you need HTTPS, request/response semantics, or public-internet robustness, use TLS or QUIC.
+Yes. Metrics are **always on** (Prometheus format):
+rate-limit drops, crypto failures, handshake pressure — all visible.
 
 ---
 
-## Best-fit use cases
+## What intentra is *not*
 
-**Where intentra shines:**
+> **Is this a TLS / QUIC replacement?**
+> No.
+
+> **Can I expose this directly to the public internet?**
+> No — you need a firewall.
+
+> **Does it guarantee zero packet loss?**
+> No — it guarantees **no stalls**.
+
+> **Is this an RPC or streaming framework?**
+> No — it moves packets, fast.
+
+---
+
+## Where it shines
+
+> **Best-fit workloads**
 
 * Robotics fleet telemetry
-* Real-time simulation / digital twins
+* Real-time simulations / digital twins
 * Multiplayer game state replication
 * Private market data feeds
 
-**Not a good fit for:**
+> **Bad fit**
 
-* Public-facing services
-* Reliable file transfer
-* RPC / microservices APIs
+* Public APIs
+* File transfer
+* RPC / microservices
+* Anything needing strict reliability
 
 ---
 
-## Measured performance (real benchmarks)
+## How fast is it really?
 
-All results below are **measured**.
+> **Measured, not theoretical**
 
-**Test parameters**
+* 128-byte packets
+* 120s per test
+* 2 senders
 
-* Packet size: 128 bytes
-* Duration: 120s per test
-* Senders: 2
+**What we see:**
 
-### Capacity envelope
-
-| Aggregate PPS | Delivery | Notes                 |
-| ------------: | -------: | --------------------- |
-|   ≤ 1,000,000 |    ≥ 99% | Stable, deterministic |
-|    ~1,200,000 |     ~88% | Near limit            |
-|   > 1,500,000 |    < 70% | Graceful degradation  |
+* Up to **~1,000,000 packets/sec** → **≥99% delivery**
+* Around **~1.2M pps** → delivery starts degrading
+* Above that → smooth drops, no collapse
 
 Example:
 
-* **2,000 peers @ 500 Hz** → ~1,000,000 PPS @ **99.99% delivery**
-* **1,500 peers @ 800 Hz** → ~1.2M PPS @ **88% delivery**
+* **2,000 peers @ 500 Hz** → ~1M PPS @ **99.99% delivery**
+* **1,500 peers @ 800 Hz** → ~1.2M PPS @ **~88% delivery**
 
-Failure mode: **single-core CPU saturation**, not protocol collapse.
+Failure mode: **CPU saturation**, not protocol failure.
 
 ---
 
-## Recommended operating range
+## Measured performance
 
-* **Default state rate:** 200 Hz
-* **High-performance tier:** 500 Hz
-* **Avoid networked 1000 Hz unless local-only**
+### Throughput accuracy & saturation
 
-### Scaling guidance
+![Throughput Accuracy](plots/throughput_accuracy.png)
 
-* Recommended per instance: **100–250 active peers**
-* Scale via **sharding across multiple intentra instances**
-* Routing handled at application layer
+This shows how closely intentra tracks the requested packet rate and where
+single-core saturation begins.
+
+### Reliability envelope
+
+![Delivery Ratio](plots/delivery_ratio.png)
+
+This shows delivery ratio as load increases. Degradation is smooth and
+predictable — no stalls or collapse.
+
+---
+
+## How should I run it?
+
+> **Recommended defaults**
+
+* State rate: **200 Hz**
+* High-performance tier: **500 Hz**
+* Shard after **100–250 peers per instance**
+
+Scaling is done by **running more intentra instances**, not by pushing one harder.
 
 ---
 
@@ -120,47 +125,49 @@ Failure mode: **single-core CPU saturation**, not protocol collapse.
 use intentra::transport::Transport;
 
 fn main() -> std::io::Result<()> {
-    let mut transport = Transport::bind("127.0.0.1:9000", false)?;
-    transport.run(); // blocks
+    let mut t = Transport::bind("127.0.0.1:9000", false)?;
+    t.run(); // blocks
     Ok(())
 }
 ```
 
 ---
 
-## Security model (summary)
+## Security model (short version)
 
-**In scope (mitigated):**
+> **What intentra protects against**
 
 * Replay attacks
 * ACK floods
 * Handshake floods
 * Malformed packets
-* Protocol abuse
 
-**Out of scope (external mitigation required):**
+> **What it doesn’t**
 
 * Volumetric DDoS
 * Compromised keys
-* Application-layer attacks
+* Application-level bugs
 
-Firewall + monitoring are required for production use.
+Firewall + monitoring are mandatory.
 
 ---
 
 ## Versioning
 
-* API is **unstable** in v0.x
-* Breaking changes may occur before 1.0
-* See `CHANGELOG.md` for details
+> **Is the API stable?**
+> No. v0.x is **intentionally unstable**.
+
+Expect improvements and breaking changes before 1.0.
 
 ---
 
 ## License
 
-Licensed under either of:
+MIT OR Apache-2.0
+Your choice.
 
-* Apache 2.0
-* MIT
+---
 
-At your option.
+### One-line takeaway
+
+> **intentra is for real-time systems that prefer dropping packets over dropping frames.**
